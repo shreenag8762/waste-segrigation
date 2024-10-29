@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+    <title>Smart Dustbin Monitor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.0/chart.min.js"></script>
+    <style>
+        .histogram-container {
+            width: 100%;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Smart Dustbin Monitor</h1>
+            <div class="subtitle">Arduino Serial Connection</div>
+        </div>
+
+        <div class="connection-panel">
+            <button id="connectBtn" class="btn">
+                <span class="btn-text">Connect</span>
+                <span class="btn-icon">🔌</span>
+            </button>
+            <button id="disconnectBtn" class="btn btn-disconnect" disabled>
+                <span class="btn-text">Disconnect</span>
+            </button>
+            <div id="connectionStatus" class="status">Not Connected</div>
+        </div>
+
+        <div class="bins-container">
+            <div class="bin">
+                <div class="bin-title">Bin 1</div>
+                <div class="level-bar-container">
+                    <div class="level-bar">
+                        <div id="bin1Level" class="level-fill">
+                            <div class="level-wave"></div>
+                        </div>
+                    </div>
+                    <div id="bin1Text" class="level-text">Level: 0%</div>
+                </div>
+            </div>
+
+            <div class="bin">
+                <div class="bin-title">Bin 2</div>
+                <div class="level-bar-container">
+                    <div class="level-bar">
+                        <div id="bin2Level" class="level-fill">
+                            <div class="level-wave"></div>
+                        </div>
+                    </div>
+                    <div id="bin2Text" class="level-text">Level: 0%</div>
+                </div>
+            </div>
+
+            <div class="bin">
+                <div class="bin-title">Bin 3</div>
+                <div class="level-bar-container">
+                    <div class="level-bar">
+                        <div id="bin3Level" class="level-fill">
+                            <div class="level-wave"></div>
+                        </div>
+                    </div>
+                    <div id="bin3Text" class="level-text">Level: 0%</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="histogram-container">
+            <canvas id="binHistogram"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let port;
+        let reader;
+        let keepReading = true;
+        let decoder = new TextDecoder();
+        let inputBuffer = '';
+        let histogramChart;
+
+        // DOM elements
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const connectionStatus = document.getElementById('connectionStatus');
+
+        // Initialize histogram
+        function initializeHistogram() {
+            const ctx = document.getElementById('binHistogram').getContext('2d');
+            histogramChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Bin 1', 'Bin 2', 'Bin 3'],
+                    datasets: [{
+                        label: 'Fill Levels (%)',
+                        data: [0, 0, 0],
+                        backgroundColor: [
+                            'rgba(75, 192, 192, 0.6)',
+                            'rgba(75, 192, 192, 0.6)',
+                            'rgba(75, 192, 192, 0.6)'
+                        ],
+                        borderColor: [
+                            'rgba(75, 192, 192, 1)',
+                            'rgba(75, 192, 192, 1)',
+                            'rgba(75, 192, 192, 1)'
+                        ],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+        }
+
+        // Initialize histogram on page load
+        initializeHistogram();
+
+        // Check Web Serial API support
+        if (!('serial' in navigator)) {
+            connectionStatus.textContent = 'Web Serial API not supported';
+            connectBtn.disabled = true;
+        }
+
+        // Connect to serial port
+        connectBtn.addEventListener('click', async () => {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 9600 });
+                
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                updateConnectionStatus('Connected', 'success');
+                
+                readSerialData();
+            } catch (error) {
+                updateConnectionStatus('Connection Failed', 'error');
+                console.error('Connection error:', error);
+            }
+        });
+
+        // Disconnect from serial port
+        disconnectBtn.addEventListener('click', async () => {
+            try {
+                keepReading = false;
+                if (reader) {
+                    await reader.cancel();
+                }
+                if (port) {
+                    await port.close();
+                }
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                updateConnectionStatus('Disconnected', 'warning');
+            } catch (error) {
+                console.error('Disconnect error:', error);
+            }
+        });
+
+        // Update connection status with visual feedback
+        function updateConnectionStatus(message, type) {
+            connectionStatus.textContent = message;
+            connectionStatus.className = 'status';
+            
+            switch(type) {
+                case 'success':
+                    connectionStatus.style.backgroundColor = '#d4edda';
+                    connectionStatus.style.color = '#155724';
+                    break;
+                case 'error':
+                    connectionStatus.style.backgroundColor = '#f8d7da';
+                    connectionStatus.style.color = '#721c24';
+                    break;
+                case 'warning':
+                    connectionStatus.style.backgroundColor = '#fff3cd';
+                    connectionStatus.style.color = '#856404';
+                    break;
+                default:
+                    connectionStatus.style.backgroundColor = '#f8f9fa';
+                    connectionStatus.style.color = '#383d41';
+            }
+        }
+
+        // Read serial data
+        async function readSerialData() {
+            while (port.readable && keepReading) {
+                reader = port.readable.getReader();
+                try {
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) {
+                            break;
+                        }
+                        inputBuffer += decoder.decode(value);
+                        processBuffer();
+                    }
+                } catch (error) {
+                    console.error('Error reading data:', error);
+                } finally {
+                    reader.releaseLock();
+                }
+            }
+        }
+
+        // Process incoming data buffer
+        function processBuffer() {
+            let newlineIndex;
+            while ((newlineIndex = inputBuffer.indexOf('\n')) !== -1) {
+                const line = inputBuffer.slice(0, newlineIndex).trim();
+                inputBuffer = inputBuffer.slice(newlineIndex + 1);
+                if (line) {
+                    processSerialData(line);
+                }
+            }
+        }
+
+        // Process and display the data
+        function processSerialData(data) {
+            const values = data.split(',');
+            values.forEach(value => {
+                const [bin, level] = value.split(':');
+                if (bin && level) {
+                    updateBinLevel(bin.trim(), parseInt(level.trim()));
+                }
+            });
+        }
+
+        // Update bin level display with animations
+        function updateBinLevel(bin, level) {
+            if (isNaN(level) || level < 0 || level > 100) return;
+            
+            const binNumber = bin.replace('Bin', '');
+            const levelElement = document.getElementById(`bin${binNumber}Level`);
+            const textElement = document.getElementById(`bin${binNumber}Text`);
+            
+            if (!levelElement || !textElement) return;
+
+            // Add animation class
+            levelElement.classList.add('updating');
+            
+            // Update level with animation
+            setTimeout(() => {
+                levelElement.style.width = `${level}%`;
+                textElement.textContent = `Level: ${level}%`;
+
+                levelElement.classList.remove('warning', 'danger');
+                if (level > 80) {
+                    levelElement.classList.add('danger');
+                } else if (level > 60) {
+                    levelElement.classList.add('warning');
+                }
+                
+                // Update histogram
+                histogramChart.data.datasets[0].data[binNumber - 1] = level;
+                histogramChart.data.datasets[0].backgroundColor[binNumber - 1] = 
+                    level > 80 ? 'rgba(255, 99, 132, 0.6)' :
+                    level > 60 ? 'rgba(255, 205, 86, 0.6)' :
+                    'rgba(75, 192, 192, 0.6)';
+                histogramChart.data.datasets[0].borderColor[binNumber - 1] = 
+                    level > 80 ? 'rgba(255, 99, 132, 1)' :
+                    level > 60 ? 'rgba(255, 205, 86, 1)' :
+                    'rgba(75, 192, 192, 1)';
+                histogramChart.update();
+                
+                // Remove animation class
+                setTimeout(() => {
+                    levelElement.classList.remove('updating');
+                }, 800);
+            }, 50);
+        }
+    </script>
+</body>
+</html>
